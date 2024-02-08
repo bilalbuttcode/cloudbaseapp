@@ -1,35 +1,39 @@
-from flask import Flask, request, jsonify,render_template
-from flask_sqlalchemy import SQLAlchemy
+from flask import Flask, request, jsonify, render_template
 import requests
 import hashlib
 from flask_cors import CORS
+import pyodbc
 
 app = Flask(__name__)
 CORS(app)
+
+# Database connection string
+conn_str = ('Driver={ODBC Driver 18 for SQL Server};'
+            'Server=sqldatabasemalvare.database.windows.net,1433;'
+            'Database=cloudmalvaredetectionbackend;'
+            'Uid=admindev;'
+            'Pwd=12@bil@lbil@l;'
+            'Encrypt=yes;'
+            'TrustServerCertificate=no;'
+            'Connection Timeout=30;')
+
+
+def get_db_connection():
+    try:
+        conn = pyodbc.connect(conn_str)
+        print("Successfully connected to the database.")
+        return conn
+    except Exception as e:
+        print("Failed to connect to the database. Error: ", e)
+        return None
+
+
+
 @app.route("/")
 def hello_world():
     return render_template('index.html')
 
-# Configure your MySQL connection
-app.config['SQLALCHEMY_DATABASE_URI'] = 'mysql+pymysql://root:@localhost/cloudmalvaredetectionbackend'
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-db = SQLAlchemy(app)
-
-# Define your model (table structure)
-class MalwareStatus(db.Model):
-    __tablename__ = 'your_table_name'
-    sno = db.Column(db.Integer, primary_key=True)
-    malwarestatus = db.Column(db.String(80), nullable=False)
-    malwaretype = db.Column(db.String(12), nullable=False)
-
-    def __init__(self, malwarestatus, malwaretype):
-        self.malwarestatus = malwarestatus
-        self.malwaretype = malwaretype
-
-def create_tables():
-    with app.app_context():
-        db.create_all()
 
 known_malware_signatures_md5 = [
     "ca169e0532e26ec7389e558ad2bafd21",
@@ -68,6 +72,7 @@ known_malware_signatures_sha256 = [
     "a2c500c7713a52871d1e117a84f257b4c7071ea08aee6ca0ad34f203ec16a7f9",
 ]
 
+
 def check_hash_and_save(file_content):
     # Initialize variables
     malware_status = 'clean'
@@ -92,14 +97,32 @@ def check_hash_and_save(file_content):
             malware_status = 'detected'
             malware_type = algorithm  # or more specific information if available
 
-    # Save the detection results in the database
-    new_entry = MalwareStatus(malwarestatus=malware_status, malwaretype=malware_type)
-    db.session.add(new_entry)
-    db.session.commit()
+
+    # Connect to the database
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    # If any of the hashes is detected as malware, update malware_status and malware_type
+    # and save the detection results in the database
+    if malware_status == 'clean' or malware_status == 'detected':
+        try:
+            cursor.execute("INSERT INTO your_table_name (malwarestatus, malwaretype) VALUES (?, ?)",
+                           (malware_status, malware_type))
+            conn.commit()
+        except Exception as e:
+            print("Error inserting into the database: ", e)
+        finally:
+            cursor.close()
+            conn.close()
 
     # Return the results and the details of detection
     return {'status': malware_status, 'type': malware_type, 'details': detection_details}
+
+
+
 CORS(app, resources={r"/submit-malware": {"methods": ["POST"]}})
+
+
 @app.route('/submit-malware', methods=['POST'])
 def submit_malware():
     data = request.json
@@ -117,9 +140,8 @@ def submit_malware():
         return jsonify({'message': 'File processed', 'result': result}), 200
 
     except Exception as e:
-        db.session.rollback()
         return jsonify({'message': 'Error occurred', 'error': str(e)}), 500
 
+
 if __name__ == '__main__':
-    create_tables()
     app.run(debug=True)
